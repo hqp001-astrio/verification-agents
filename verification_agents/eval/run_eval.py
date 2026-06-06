@@ -23,7 +23,37 @@ from verification_agents.specialists.verify import verify
 from verification_agents.tools import parse_diff as _parse_diff
 
 load_dotenv()
-_MODEL = os.environ.get("VERIFY_MODEL", "gpt-4o-mini")
+_MODEL = os.environ.get("VERIFY_MODEL", "gpt-4o-mini")        # the verifier's encoder
+_BASE_MODEL = os.environ.get("BASE_MODEL", _MODEL)            # the LLM under comparison
+
+
+def _is_reasoning(model: str) -> bool:
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _chat(client, model: str, system: str, user: str) -> str:
+    """Model-aware chat call (reasoning models reject temperature/max_tokens)."""
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    if _is_reasoning(model):
+        resp = client.chat.completions.create(model=model, messages=msgs,
+                                              max_completion_tokens=4096)
+    else:
+        resp = client.chat.completions.create(model=model, messages=msgs,
+                                              temperature=0, max_tokens=8)
+    return resp.choices[0].message.content or ""
+
+
+def _chat_anthropic(model: str, system: str, user: str) -> str:
+    """One-shot classification via the Anthropic SDK. Opus 4.8 rejects temperature
+    and returns content as a list of blocks."""
+    import anthropic
+
+    client = anthropic.Anthropic()  # resolves ANTHROPIC_API_KEY from the env
+    resp = client.messages.create(
+        model=model, max_tokens=256, system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    return next((b.text for b in resp.content if b.type == "text"), "")
 
 try:
     import weave
@@ -62,18 +92,18 @@ def _code_to_diff(code: str, name: str) -> str:
 
 @_op("eval.base_llm")
 def base_llm(case: Case, api_key: str) -> str:
-    import openai
+    prompt = f"```python\n{case.code}\n```"
+    if _BASE_MODEL.startswith("claude"):
+        word = _chat_anthropic(_BASE_MODEL, _BASE_SYSTEM, prompt).strip().lower()
+    else:
+        import openai
 
-    client = openai.OpenAI(api_key=api_key)
-    resp = client.chat.completions.create(
-        model=_MODEL, temperature=0, max_tokens=4,
-        messages=[{"role": "system", "content": _BASE_SYSTEM},
-                  {"role": "user", "content": f"```python\n{case.code}\n```"}],
-    )
-    word = (resp.choices[0].message.content or "").strip().lower()
-    for token, decision in _BASE_MAP.items():
+        client = openai.OpenAI(api_key=api_key)
+        word = _chat(client, _BASE_MODEL, _BASE_SYSTEM, prompt).strip().lower()
+    # match the most specific token first so "no bug" isn't read as a bug
+    for token in ("unsure", "safe", "bug"):
         if token in word:
-            return decision
+            return _BASE_MAP[token]
     return "unsure"
 
 
@@ -124,7 +154,7 @@ def run(cases: list[Case] | None = None) -> dict:
     bm, vm = _metrics(base_preds, golds), _metrics(ver_preds, golds)
     n = len(cases)
 
-    print(f"\nmodel: {_MODEL}    dataset: {len(cases)} cases")
+    print(f"\nbase: {_BASE_MODEL}    verifier-encoder: {_MODEL}    dataset: {len(cases)} cases")
     print(f"{'case':22} {'gold':7} {'base':7} {'verifier':9} grounded")
     print("-" * 56)
     for name, gold, b, v, g in rows:
