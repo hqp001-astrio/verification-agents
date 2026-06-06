@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import openai
+from pydantic import BaseModel, Field
 
 from verification_agents.models import (
     CodeAnalysis,
     CodeUnit,
+    PropertyKind,
     UserSelection,
     VerifiableProperty,
     Z3Constraint,
 )
 
-# Module-level store: property_id → z3.BoolRef (live Z3 objects across tool calls)
 _z3_store: dict[str, object] = {}
 
 
@@ -22,21 +23,69 @@ def clear_store() -> None:
     _z3_store.clear()
 
 
-_FORMALIZE_SYSTEM = """\
-You are a formal verification expert specializing in Z3 SMT solver.
-Given a code snippet and a property to verify, produce a valid Python code snippet \
-that uses the z3 Python library to express the property as a constraint.
+class _FormalConstraintSpec(BaseModel):
+    kind: PropertyKind
+    description: str
+    index_var: str = Field(default="index", description="Symbolic array index variable name")
+    length_var: str = Field(default="length", description="Symbolic array length variable name")
+    nullable_var: str = Field(default="not_null", description="Symbolic nullable object variable name")
+    operand_vars: list[str] = Field(
+        default_factory=lambda: ["a", "b"],
+        description="Symbolic operand variable names for the arithmetic expression",
+    )
+    operator: str = Field(default="+", description="Arithmetic operator: +, -, *")
+    int_min: int = Field(default=-(2**31), description="Minimum safe integer value")
+    int_max: int = Field(default=2**31 - 1, description="Maximum safe integer value")
+    variant_var: str = Field(default="variant", description="Symbolic loop variant variable name")
 
-Rules:
-- Output only the Python code snippet, no markdown fences, no explanation.
-- The snippet must define a variable named `constraint` of type `z3.BoolRef`.
-- Start with `import z3`
-- Keep it concise. Use z3.Int, z3.Bool, z3.ForAll, z3.Implies, z3.And, z3.Or, z3.Not as needed.
-- Model the property abstractly — use symbolic variables for function parameters.
-- For array bounds: use a symbolic integer index and array length, assert 0 <= index < length.
-- For null dereference: use a z3.Bool to represent nullability, assert it is True (not null).
-- For integer overflow: assert the arithmetic result stays within a safe integer range.
-- For loop termination: encode a decreasing variant (loop counter strictly decreases each step).
+
+def _build_z3_constraint(spec: _FormalConstraintSpec):
+    import z3
+
+    match spec.kind:
+        case PropertyKind.ARRAY_BOUNDS:
+            index = z3.Int(spec.index_var)
+            length = z3.Int(spec.length_var)
+            return z3.And(index >= 0, index < length, length > 0)
+
+        case PropertyKind.NULL_DEREFERENCE:
+            return z3.Bool(spec.nullable_var)
+
+        case PropertyKind.INTEGER_OVERFLOW:
+            lo, hi = spec.int_min, spec.int_max
+            if len(spec.operand_vars) >= 2:
+                a = z3.Int(spec.operand_vars[0])
+                b = z3.Int(spec.operand_vars[1])
+                result = {"+": a + b, "-": a - b, "*": a * b}.get(spec.operator, a + b)
+                precond = z3.And(a >= lo, a <= hi, b >= lo, b <= hi)
+            elif spec.operand_vars:
+                a = z3.Int(spec.operand_vars[0])
+                result, precond = a, z3.And(a >= lo, a <= hi)
+            else:
+                return None
+            return z3.Implies(precond, z3.And(result >= lo, result <= hi))
+
+        case PropertyKind.LOOP_TERMINATION:
+            variant = z3.Int(spec.variant_var)
+            next_v = z3.Int(spec.variant_var + "_next")
+            return z3.Implies(variant > 0, z3.And(next_v < variant, next_v >= 0))
+
+        case _:
+            return None
+
+
+_FORMALIZE_SYSTEM = """\
+You are a formal verification expert.
+Given a code property to verify, fill in the constraint specification for the Z3 SMT solver.
+
+Use meaningful variable names drawn from the actual code:
+- array_bounds: index_var = the index expression, length_var = the array/sequence length
+- null_dereference: nullable_var = the object being dereferenced
+- integer_overflow: operand_vars = operand names, operator = +/-/*, int_min/int_max = bounds (default: 32-bit signed)
+- loop_termination: variant_var = the loop counter or decreasing quantity
+- For other kinds use sensible defaults.
+
+Return only the JSON object matching the schema. No explanation.
 """
 
 
@@ -55,44 +104,34 @@ def _formalize_one(
         f"- Description: {prop.description}\n"
         f"- Function: {prop.unit_name}\n"
         f"- File: {prop.filename}, line {prop.start_line}"
-        f"{code_section}\n\n"
-        f"Produce a z3 Python snippet (no markdown) that defines `constraint` as a z3.BoolRef."
+        f"{code_section}"
     )
 
-    response = client.chat.completions.create(
+    response = client.beta.chat.completions.parse(
         model=model,
         messages=[
             {"role": "system", "content": _FORMALIZE_SYSTEM},
             {"role": "user", "content": prompt},
         ],
-        max_tokens=512,
+        response_format=_FormalConstraintSpec,
+        max_tokens=256,
         temperature=0,
     )
 
-    code = response.choices[0].message.content.strip()
-    # Strip markdown fences if the model added them anyway
-    if code.startswith("```"):
-        lines = code.splitlines()
-        code = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-    local_scope: dict = {}
-    try:
-        import builtins
-        exec(code, {"__builtins__": builtins, "z3": __import__("z3")}, local_scope)  # noqa: S102
-    except Exception:
+    spec = response.choices[0].message.parsed
+    if spec is None:
         return None
 
-    import z3
-    constraint_obj = local_scope.get("constraint")
-    if not isinstance(constraint_obj, z3.ExprRef):
+    constraint_obj = _build_z3_constraint(spec)
+    if constraint_obj is None:
         return None
 
     _z3_store[prop.id] = constraint_obj
 
     return Z3Constraint(
         property_id=prop.id,
-        description=prop.description,
-        z3_code=code,
+        description=spec.description,
+        z3_code=f"# template-built for {spec.kind.value}",
     )
 
 
