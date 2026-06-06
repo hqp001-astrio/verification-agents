@@ -1,0 +1,31 @@
+[project]
+name = "verification-agents"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "z3-solver>=4.16.0.0",
+    "tree-sitter>=0.25.0",
+    "tree-sitter-python>=0.23",
+    "tree-sitter-javascript>=0.23",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "openai>=2.41.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0", "ruff>=0.4.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

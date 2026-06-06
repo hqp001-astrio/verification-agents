@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Verification Agents — Formal Code Verification with AI + Z3</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" />
+<style>
+  :root {
+    --bg: #0d0f14;
+    --surface: #151820;
+    --surface2: #1c2030;
+    --border: #2a2f45;
+    --accent: #6c8aff;
+    --accent2: #a78bfa;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --radius: 10px;
+    --font-mono: "JetBrains Mono", "Fira Code", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* ── NAV ── */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(13,15,20,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; align-items: center; gap: 2rem; height: 56px;
+  }
+  .nav-logo { font-weight: 700; font-size: 1.05rem; color: var(--accent); letter-spacing: -0.02em; }
+  .nav-links { display: flex; gap: 1.5rem; margin-left: auto; }
+  .nav-links a { color: var(--muted); text-decoration: none; font-size: 0.875rem; transition: color .2s; }
+  .nav-links a:hover { color: var(--text); }
+
+  /* ── LAYOUT ── */
+  .page { max-width: 1100px; margin: 0 auto; padding: 0 2rem 6rem; }
+
+  /* ── HERO ── */
+  .hero {
+    text-align: center; padding: 5rem 1rem 4rem;
+    position: relative;
+  }
+  .hero::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(108,138,255,0.12), transparent);
+    pointer-events: none;
+  }
+  .badge {
+    display: inline-block; background: rgba(108,138,255,0.15);
+    color: var(--accent); border: 1px solid rgba(108,138,255,0.3);
+    border-radius: 999px; padding: 0.2rem 0.85rem; font-size: 0.75rem;
+    font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 1.25rem;
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.2rem); font-weight: 800;
+    letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 1rem;
+    background: linear-gradient(135deg, #e2e8f0 30%, var(--accent2));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .hero p {
+    font-size: 1.1rem; color: var(--muted); max-width: 560px;
+    margin: 0 auto 2rem;
+  }
+  .hero-buttons { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    padding: 0.6rem 1.4rem; border-radius: var(--radius); font-size: 0.9rem;
+    font-weight: 600; cursor: pointer; border: none; transition: all .2s; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 0.4rem;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #5a78f0; transform: translateY(-1px); }
+  .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+  /* ── SECTION ── */
+  section { margin-top: 5rem; }
+  .section-label {
+    font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 0.5rem;
+  }
+  h2 { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.5rem; }
+  .section-desc { color: var(--muted); margin-bottom: 2rem; max-width: 600px; }
+
+  /* ── PIPELINE DIAGRAM ── */
+  .pipeline {
+    display: flex; flex-direction: column; align-items: center; gap: 0;
+    position: relative;
+  }
+  .pipe-node {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.25rem 1.5rem;
+    width: 100%; max-width: 600px; cursor: pointer;
+    transition: border-color .2s, box-shadow .2s;
+    position: relative;
+  }
+  .pipe-node:hover, .pipe-node.active {
+    border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 24px rgba(108,138,255,0.15);
+  }
+  .pipe-node-header {
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .pipe-icon {
+    width: 36px; height: 36px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; flex-shrink: 0;
+  }
+  .pipe-node-title { font-weight: 600; font-size: 0.95rem; }
+  .pipe-node-sub { font-size: 0.8rem; color: var(--muted); margin-top: 0.1rem; }
+  .pipe-chevron {
+    margin-left: auto; color: var(--muted); transition: transform .3s;
+    font-size: 0.8rem;
+  }
+  .pipe-node.active .pipe-chevron { transform: rotate(180deg); }
+  .pipe-detail {
+    display: none; margin-top: 1rem; padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .pipe-node.active .pipe-detail { display: block; }
+  .pipe-arrow {
+    width: 2px; height: 28px; background: linear-gradient(to bottom, var(--accent), var(--accent2));
+    opacity: 0.5;
+  }
+
+  .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 0.75rem; }
+  .detail-box { background: var(--surface2); border-radius: 7px; padding: 0.75rem 1rem; }
+  .detail-box-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 0.4rem; }
+  .detail-box p { font-size: 0.82rem; color: var(--text); }
+
+  /* ── SEVERITY BADGES ── */
+  .sev { display: inline-block; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; }
+  .sev-critical { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.3); }
+  .sev-high     { background: rgba(251,146,60,0.15);  color: var(--orange); border: 1px solid rgba(251,146,60,0.3); }
+  .sev-medium   { background: rgba(251,191,36,0.15);  color: var(--yellow); border: 1px solid rgba(251,191,36,0.3); }
+  .sev-low      { background: rgba(52,211,153,0.15);  color: var(--green); border: 1px solid rgba(52,211,153,0.3); }
+
+  /* ── SEVERITY TABLE ── */
+  .sev-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  .sev-table th { text-align: left; padding: 0.6rem 1rem; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .sev-table td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); }
+  .sev-table tr:last-child td { border-bottom: none; }
+  .sev-table tr:hover td { background: var(--surface2); }
+
+  /* ── MODELS ── */
+  .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+  .model-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 1.25rem; transition: border-color .2s;
+  }
+  .model-card:hover { border-color: var(--accent); }
+  .model-card h3 { font-size: 0.95rem; font-weight: 700; font-family: var(--font-mono); color: var(--accent2); margin-bottom: 0.6rem; }
+  .model-field { display: flex; justify-content: space-between; align-items: baseline; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+  .model-field:last-child { border-bottom: none; }
+  .field-name { font-family: var(--font-mono); color: var(--text); }
+  .field-type { font-family: var(--font-mono); color: var(--muted); font-size: 0.75rem; }
+
+  /* ── CODE BLOCKS ── */
+  .code-block { background: #0f111a; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; margin: 1.25rem 0; }
+  .code-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; background: var(--surface2); border-bottom: 1px solid var(--border); }
+  .code-lang { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .code-copy { background: none; border: 1px solid var(--border); color: var(--muted); padding: 0.2rem 0.6rem; border-radius: 5px; font-size: 0.72rem; cursor: pointer; transition: all .2s; }
+  .code-copy:hover { border-color: var(--accent); color: var(--accent); }
+  .code-block pre { margin: 0 !important; border-radius: 0 !important; background: transparent !important; padding: 1.1rem 1.25rem !important; font-size: 0.82rem !important; overflow-x: auto; }
+
+  /* ── QUICK START STEPS ── */
+  .steps { display: flex; flex-direction: column; gap: 1rem; }
+  .step { display: flex; gap: 1.25rem; align-items: flex-start; }
+  .step-num {
+    width: 32px; height: 32px; border-radius: 50%; background: rgba(108,138,255,0.15);
+    border: 1px solid rgba(108,138,255,0.4); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.8rem; font-weight: 700; flex-shrink: 0; margin-top: 0.1rem;
+  }
+  .step-body h4 { font-size: 0.95rem; font-weight: 600; margin-bottom: 0.25rem; }
+  .step-body p { font-size: 0.875rem; color: var(--muted); }
+
+  /* ── TABS ── */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1.5rem; overflow-x: auto; }
+  .tab {
+    padding: 0.65rem 1.25rem; cursor: pointer; font-size: 0.875rem; font-weight: 500;
+    color: var(--muted); border-bottom: 2px solid transparent; transition: all .2s;
+    white-space: nowrap; background: none; border-top: none; border-left: none; border-right: none;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:hover:not(.active) { color: var(--text); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── FLOW DEMO ── */
+  .flow-demo {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.5rem; overflow: hidden;
+  }
+  .flow-log { font-family: var(--font-mono); font-size: 0.8rem; min-height: 220px; }
+  .flow-line { display: flex; gap: 0.75rem; padding: 0.3rem 0; opacity: 0; transform: translateY(4px); transition: all .4s; }
+  .flow-line.visible { opacity: 1; transform: none; }
+  .flow-time { color: var(--muted); flex-shrink: 0; }
+  .flow-agent { color: var(--accent); }
+  .flow-tool { color: var(--accent2); }
+  .flow-result { color: var(--green); }
+  .flow-bug { color: var(--red); }
+  .flow-controls { display: flex; gap: 0.75rem; margin-top: 1rem; }
+  .flow-btn {
+    padding: 0.4rem 1rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600;
+    cursor: pointer; border: 1px solid var(--border); background: var(--surface2);
+    color: var(--text); transition: all .2s;
+  }
+  .flow-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .flow-btn.running { border-color: var(--accent2); color: var(--accent2); cursor: not-allowed; }
+
+  /* ── FOOTER ── */
+  footer { border-top: 1px solid var(--border); margin-top: 5rem; padding: 2rem 0; text-align: center; color: var(--muted); font-size: 0.85rem; }
+
+  /* ── MISC ── */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 4rem 0; }
+  code { font-family: var(--font-mono); font-size: 0.85em; background: var(--surface2); padding: 0.15em 0.4em; border-radius: 4px; color: var(--accent2); }
+  .highlight-box { background: rgba(108,138,255,0.07); border: 1px solid rgba(108,138,255,0.2); border-radius: var(--radius); padding: 1rem 1.25rem; font-size: 0.875rem; color: var(--text); margin: 1rem 0; }
+  .highlight-box strong { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="nav-logo">⬡ Verification Agents</span>
+  <div class="nav-links">
+    <a href="#architecture">Architecture</a>
+    <a href="#tools">Tools</a>
+    <a href="#models">Models</a>
+    <a href="#quickstart">Quick Start</a>
+    <a href="#demo">Demo</a>
+  </div>
+</nav>
+
+<div class="page">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div class="badge">Formal Verification · AI · Z3 SMT Solver</div>
+    <h1>Catch bugs before they ship</h1>
+    <p>An AI agent that reads your code diff, surfaces what it can formally verify, and uses the Z3 SMT solver to find real bugs — with counterexamples.</p>
+    <div class="hero-buttons">
+      <a href="#quickstart" class="btn btn-primary">↓ Get Started</a>
+      <a href="#architecture" class="btn btn-secondary">View Architecture</a>
+    </div>
+  </div>
+
+  <!-- ARCHITECTURE -->
+  <section id="architecture">
+    <div class="section-label">How it works</div>
+    <h2>Agent Architecture</h2>
+    <p class="section-desc">The orchestrator is a GPT-4o agent running in a tool-use loop — not a fixed pipeline. It decides what to do at each step, can ask clarifying questions, and ends only when it calls <code>submit_report</code>.</p>
+
+    <div class="pipeline">
+
+      <div class="pipe-node" onclick="toggleNode(this)">
+        <div class="pipe-node-header">
+          <div class="pipe-icon" style="background:rgba(108,138,255,0.15)">🧠</div>
+          <div>
+            <div class="pipe-node-title">Orchestrator Agent</div>
+            <div class="pipe-node-sub">GPT-4o in a tool-use loop · up to 20 turns</div>
+          </div>
+          <span class="pipe-chevron">▼</span>
+        </div>
+        <div class="pipe-detail">
+          <p style="font-size:0.85rem;color:var(--muted)">The orchestrator receives the raw diff and a system prompt that instructs it to follow the verification workflow. It calls tools in sequence, interprets results, and writes the final prose summary inside <code>submit_report</code>. It cannot finish without calling that tool.</p>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="detail-box-label">Model</div><p>gpt-4o (default)</p></div>
+            <div class="detail-box"><div class="detail-box-label">Max turns</div><p>20 (configurable)</p></div>
+            <div class="detail-box"><div class="detail-box-label">Input</div><p>Unified diff + optional intent</p></div>
+            <div class="detail-box"><div class="detail-box-label">Output</div><p>VerificationReport (JSON)</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipe-arrow"></div>
+
+      <div class="pipe-node" onclick="toggleNode(this)">
+        <div class="pipe-node-header">
+          <div class="pipe-icon" style="background:rgba(167,139,250,0.15)">🌳</div>
+          <div>
+            <div class="pipe-node-title">parse_diff</div>
+            <div class="pipe-node-sub">tree-sitter AST · call graph · property discovery</div>
+          </div>
+          <span class="pipe-chevron">▼</span>
+        </div>
+        <div class="pipe-detail">
+          <p style="font-size:0.85rem;color:var(--muted)">Parses the diff headers to find changed files and hunk ranges. Uses tree-sitter to build an AST for each file, then walks it to extract changed functions. Scans each function for verifiable patterns: array subscripts, attribute accesses, arithmetic, and loops.</p>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="detail-box-label">Input</div><p>Raw unified diff string</p></div>
+            <div class="detail-box"><div class="detail-box-label">Output</div><p>CodeAnalysis (units + call graph + properties)</p></div>
+            <div class="detail-box"><div class="detail-box-label">Languages</div><p>Python, JavaScript/TypeScript</p></div>
+            <div class="detail-box"><div class="detail-box-label">Parser</div><p>tree-sitter (zero subprocess)</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipe-arrow"></div>
+
+      <div class="pipe-node" onclick="toggleNode(this)">
+        <div class="pipe-node-header">
+          <div class="pipe-icon" style="background:rgba(52,211,153,0.15)">💬</div>
+          <div>
+            <div class="pipe-node-title">ask_user</div>
+            <div class="pipe-node-sub">presents options · waits for selection · extensible handler</div>
+          </div>
+          <span class="pipe-chevron">▼</span>
+        </div>
+        <div class="pipe-detail">
+          <p style="font-size:0.85rem;color:var(--muted)">The agent never verifies properties without user confirmation. It presents the discovered properties and calls the injected <code>clarification_handler</code>. This is the seam for the GitHub bot layer — the bot can post a PR comment and wait for a reply without changing any agent code.</p>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="detail-box-label">Input</div><p>Question + list of VerifiableProperty</p></div>
+            <div class="detail-box"><div class="detail-box-label">Output</div><p>UserSelection (selected IDs + notes)</p></div>
+            <div class="detail-box"><div class="detail-box-label">Handler</div><p>Injected by caller (CLI, bot, test)</p></div>
+            <div class="detail-box"><div class="detail-box-label">Bot hook</div><p>Post PR comment, await reply</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipe-arrow"></div>
+
+      <div class="pipe-node" onclick="toggleNode(this)">
+        <div class="pipe-node-header">
+          <div class="pipe-icon" style="background:rgba(251,191,36,0.15)">⚗️</div>
+          <div>
+            <div class="pipe-node-title">formalize</div>
+            <div class="pipe-node-sub">inner LLM call · generates Z3 Python expressions</div>
+          </div>
+          <span class="pipe-chevron">▼</span>
+        </div>
+        <div class="pipe-detail">
+          <p style="font-size:0.85rem;color:var(--muted)">Makes a focused GPT-4o call per selected property, asking it to produce a Python snippet that defines a <code>z3.BoolRef</code> named <code>constraint</code>. The snippet is executed in a sandboxed scope. The resulting live Z3 objects are stored in a module-level registry keyed by property ID.</p>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="detail-box-label">Input</div><p>UserSelection + CodeAnalysis</p></div>
+            <div class="detail-box"><div class="detail-box-label">Output</div><p>list[Z3Constraint] + in-memory z3.BoolRef store</p></div>
+            <div class="detail-box"><div class="detail-box-label">Execution</div><p>exec() in restricted scope</p></div>
+            <div class="detail-box"><div class="detail-box-label">Fallback</div><p>Skips constraint if z3.ExprRef not produced</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipe-arrow"></div>
+
+      <div class="pipe-node" onclick="toggleNode(this)">
+        <div class="pipe-node-header">
+          <div class="pipe-icon" style="background:rgba(248,113,113,0.15)">🔬</div>
+          <div>
+            <div class="pipe-node-title">z3_solve</div>
+            <div class="pipe-node-sub">negation-based checking · counterexample extraction</div>
+          </div>
+          <span class="pipe-chevron">▼</span>
+        </div>
+        <div class="pipe-detail">
+          <p style="font-size:0.85rem;color:var(--muted)">For each constraint <code>P</code>, asserts <code>Not(P)</code> and calls <code>solver.check()</code>. If SAT, the property <em>can</em> be violated — a bug. Z3 provides a concrete model (counterexample) showing which variable values trigger it. UNSAT means the property always holds.</p>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="detail-box-label">SAT result</div><p>Bug found — extract counterexample from model</p></div>
+            <div class="detail-box"><div class="detail-box-label">UNSAT result</div><p>Property holds for all inputs</p></div>
+            <div class="detail-box"><div class="detail-box-label">UNKNOWN</div><p>Timeout — reported as inconclusive</p></div>
+            <div class="detail-box"><div class="detail-box-label">Timeout</div><p>30s per constraint (configurable)</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipe-arrow"></div>
+
+      <div class="pipe-node" onclick="toggleNode(this)">
+        <div class="pipe-node-header">
+          <div class="pipe-icon" style="background:rgba(52,211,153,0.15)">📋</div>
+          <div>
+            <div class="pipe-node-title">submit_report</div>
+            <div class="pipe-node-sub">severity mapping · assembles VerificationReport · ends loop</div>
+          </div>
+          <span class="pipe-chevron">▼</span>
+        </div>
+        <div class="pipe-detail">
+          <p style="font-size:0.85rem;color:var(--muted)">Maps each SAT result to a <code>Bug</code> with a severity level based on the property kind. The orchestrator writes the prose summary (including counterexample values) directly into the tool call arguments. Receiving this result terminates the agent loop.</p>
+          <div class="detail-grid">
+            <div class="detail-box"><div class="detail-box-label">Input</div><p>SolverResult list + prose summary</p></div>
+            <div class="detail-box"><div class="detail-box-label">Output</div><p>VerificationReport (JSON-serializable)</p></div>
+            <div class="detail-box"><div class="detail-box-label">Terminates</div><p>Agent loop ends on receipt</p></div>
+            <div class="detail-box"><div class="detail-box-label">Summary</div><p>Written by orchestrator, not this tool</p></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /pipeline -->
+  </section>
+
+  <!-- SEVERITY -->
+  <section id="severity" style="margin-top:3.5rem">
+    <div class="section-label">Classification</div>
+    <h2>Severity Levels</h2>
+    <p class="section-desc">Bugs are classified by property kind. The orchestrator sorts them critical-first in the report.</p>
+
+    <div class="code-block">
+      <div class="code-header"><span class="code-lang">Severity map</span></div>
+      <table class="sev-table" style="width:100%;padding:0.5rem 1.25rem 1rem;display:block">
+        <thead>
+          <tr><th>Property Kind</th><th>Severity</th><th>Rationale</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>null_dereference</code></td><td><span class="sev sev-critical">Critical</span></td><td>Likely crash / exception at runtime</td></tr>
+          <tr><td><code>array_bounds</code> (index)</td><td><span class="sev sev-critical">Critical</span></td><td>IndexError / buffer overread</td></tr>
+          <tr><td><code>integer_overflow</code></td><td><span class="sev sev-high">High</span></td><td>Silent wrong result or exception</td></tr>
+          <tr><td><code>loop_termination</code></td><td><span class="sev sev-high">High</span></td><td>Potential infinite loop or off-by-one</td></tr>
+          <tr><td><code>postcondition</code></td><td><span class="sev sev-high">High</span></td><td>Function contract broken — callers may be wrong</td></tr>
+          <tr><td><code>precondition</code></td><td><span class="sev sev-medium">Medium</span></td><td>Caller contract violated — caught at input boundary</td></tr>
+          <tr><td><code>type_constraint</code></td><td><span class="sev sev-medium">Medium</span></td><td>Type mismatch caught at runtime</td></tr>
+          <tr><td><code>custom</code></td><td><span class="sev sev-low">Low</span></td><td>User-specified, importance unknown</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- TOOLS REFERENCE -->
+  <section id="tools">
+    <div class="section-label">Reference</div>
+    <h2>Tool API</h2>
+    <p class="section-desc">Each tool is a Python function exposed to the orchestrator as an OpenAI function-calling tool. Click a tab to explore.</p>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab(event,'parse_diff')">parse_diff</button>
+      <button class="tab" onclick="switchTab(event,'ask_user')">ask_user</button>
+      <button class="tab" onclick="switchTab(event,'formalize')">formalize</button>
+      <button class="tab" onclick="switchTab(event,'z3_solve')">z3_solve</button>
+      <button class="tab" onclick="switchTab(event,'submit_report')">submit_report</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-parse_diff">
+      <div class="highlight-box"><strong>parse_diff</strong> is always the first tool the agent calls. It turns a raw unified diff into a structured <code>CodeAnalysis</code> with extracted functions, a call graph, and a menu of verifiable properties.</div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">Python</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+        <pre><code class="language-python">from verification_agents.tools.parse_diff import run
+
+diff = open("feature.diff").read()
+analysis = run(diff)
+
+print(f"{len(analysis.units)} functions changed")
+for p in analysis.properties:
+    print(f"  [{p.kind}] {p.unit_name}: {p.description}")</code></pre>
+      </div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">Output shape</span></div>
+        <pre><code class="language-json">{
+  "units": [
+    { "name": "bulk_get_items", "filename": "inventory.py",
+      "start_line": 28, "end_line": 36, "source": "..." }
+  ],
+  "call_edges": [
+    { "caller": "process_bulk_orders", "callee": "create_order", "filename": "orders.py" }
+  ],
+  "properties": [
+    { "id": "uuid-...", "kind": "array_bounds", "unit_name": "bulk_get_items",
+      "filename": "inventory.py", "start_line": 33,
+      "description": "Array subscript items[i] — verify index within bounds" }
+  ]
+}</code></pre>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-ask_user">
+      <div class="highlight-box"><strong>ask_user</strong> is the seam between the agent and the caller. Inject a <code>clarification_handler</code> — the bot layer posts a GitHub PR comment; the CLI prompts the terminal; tests auto-select all.</div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">Python — CLI handler</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+        <pre><code class="language-python">from verification_agents.models import UserSelection, VerifiableProperty
+
+def terminal_handler(question: str, options: list[VerifiableProperty]) -> UserSelection:
+    print(question)
+    for i, opt in enumerate(options):
+        print(f"  {i+1}. [{opt.kind}] {opt.unit_name}: {opt.description}")
+    raw = input("Select (comma-separated) or Enter for all: ").strip()
+    ids = [o.id for o in options] if not raw else [
+        options[int(x)-1].id for x in raw.split(",")
+    ]
+    return UserSelection(selected_ids=ids)</code></pre>
+      </div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">Python — test / auto-select handler</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+        <pre><code class="language-python">def auto_select(question: str, options: list[VerifiableProperty]) -> UserSelection:
+    return UserSelection(selected_ids=[o.id for o in options])</code></pre>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-formalize">
+      <div class="highlight-box"><strong>formalize</strong> makes a focused GPT-4o call per selected property to generate a Z3 Python expression. The resulting <code>z3.BoolRef</code> objects live in a module-level store and are retrieved by <code>z3_solve</code> via property ID.</div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">Example Z3 snippet produced by GPT-4o</span></div>
+        <pre><code class="language-python"># For: array_bounds — "verify index i is within bounds of items"
+import z3
+i = z3.Int("i")
+n = z3.Int("n")   # n = len(items)
+constraint = z3.And(i >= 0, i < n)</code></pre>
+      </div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">For: null_dereference — user.membership access</span></div>
+        <pre><code class="language-python">import z3
+user_is_not_none = z3.Bool("user_is_not_none")
+constraint = user_is_not_none  # must be True for safe access</code></pre>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-z3_solve">
+      <div class="highlight-box"><strong>z3_solve</strong> uses negation-based checking: it asserts <code>Not(P)</code> and asks Z3 to find an input that satisfies the negation. SAT = bug found with concrete counterexample. UNSAT = property always holds.</div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">Python — what the solver does internally</span></div>
+        <pre><code class="language-python">import z3
+
+# Property P: 0 <= index < len(array)
+index = z3.Int("index")
+length = z3.Int("length")
+P = z3.And(index >= 0, index < length)
+
+solver = z3.Solver()
+solver.set("timeout", 30_000)
+solver.add(z3.Not(P))   # negate: can P be violated?
+
+result = solver.check()
+if result == z3.sat:
+    model = solver.model()
+    # e.g. {"index": "5", "length": "3"}  ← concrete bug witness
+    counterexample = {str(d): str(model[d]) for d in model.decls()}</code></pre>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-submit_report">
+      <div class="highlight-box"><strong>submit_report</strong> is the termination tool. When the agent calls it, the orchestrator loop exits and returns the <code>VerificationReport</code>. The agent writes the prose <code>summary</code> itself as an argument to this call.</div>
+      <div class="code-block">
+        <div class="code-header"><span class="code-lang">VerificationReport output</span></div>
+        <pre><code class="language-json">{
+  "bugs": [
+    {
+      "severity": "critical",
+      "unit_name": "apply_bulk_discount",
+      "filename": "inventory.py",
+      "start_line": 44,
+      "description": "Array subscript items[i] — verify index within bounds",
+      "counterexample": { "i": "5", "n": "5" },
+      "property_kind": "array_bounds"
+    }
+  ],
+  "clean": [ ... ],
+  "summary": "Three bugs were found ...",
+  "total_properties_checked": 7,
+  "elapsed_s": 18.4
+}</code></pre>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- MODELS -->
+  <section id="models">
+    <div class="section-label">Data contracts</div>
+    <h2>Models</h2>
+    <p class="section-desc">All inter-tool data is typed with Pydantic v2 models. Every field is validated at runtime and the report is fully JSON-serializable.</p>
+
+    <div class="model-grid">
+      <div class="model-card">
+        <h3>VerifiableProperty</h3>
+        <div class="model-field"><span class="field-name">id</span><span class="field-type">str (uuid)</span></div>
+        <div class="model-field"><span class="field-name">kind</span><span class="field-type">PropertyKind</span></div>
+        <div class="model-field"><span class="field-name">unit_name</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">filename</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">start_line</span><span class="field-type">int</span></div>
+        <div class="model-field"><span class="field-name">description</span><span class="field-type">str</span></div>
+      </div>
+      <div class="model-card">
+        <h3>CodeUnit</h3>
+        <div class="model-field"><span class="field-name">name</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">filename</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">language</span><span class="field-type">Language</span></div>
+        <div class="model-field"><span class="field-name">start_line</span><span class="field-type">int</span></div>
+        <div class="model-field"><span class="field-name">end_line</span><span class="field-type">int</span></div>
+        <div class="model-field"><span class="field-name">source</span><span class="field-type">str</span></div>
+      </div>
+      <div class="model-card">
+        <h3>Z3Constraint</h3>
+        <div class="model-field"><span class="field-name">property_id</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">description</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">z3_code</span><span class="field-type">str</span></div>
+      </div>
+      <div class="model-card">
+        <h3>SolverResult</h3>
+        <div class="model-field"><span class="field-name">constraint</span><span class="field-type">Z3Constraint</span></div>
+        <div class="model-field"><span class="field-name">status</span><span class="field-type">sat | unsat | unknown</span></div>
+        <div class="model-field"><span class="field-name">counterexample</span><span class="field-type">dict | None</span></div>
+        <div class="model-field"><span class="field-name">elapsed_s</span><span class="field-type">float</span></div>
+        <div class="model-field"><span class="field-name">error</span><span class="field-type">str | None</span></div>
+      </div>
+      <div class="model-card">
+        <h3>Bug</h3>
+        <div class="model-field"><span class="field-name">severity</span><span class="field-type">Severity</span></div>
+        <div class="model-field"><span class="field-name">unit_name</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">filename</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">start_line</span><span class="field-type">int</span></div>
+        <div class="model-field"><span class="field-name">description</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">counterexample</span><span class="field-type">dict | None</span></div>
+      </div>
+      <div class="model-card">
+        <h3>VerificationReport</h3>
+        <div class="model-field"><span class="field-name">bugs</span><span class="field-type">list[Bug]</span></div>
+        <div class="model-field"><span class="field-name">clean</span><span class="field-type">list[VerifiableProperty]</span></div>
+        <div class="model-field"><span class="field-name">summary</span><span class="field-type">str</span></div>
+        <div class="model-field"><span class="field-name">total_properties_checked</span><span class="field-type">int</span></div>
+        <div class="model-field"><span class="field-name">elapsed_s</span><span class="field-type">float</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:1rem">
+      <p style="font-size:0.8rem;color:var(--muted)"><strong>PropertyKind</strong> values: <code>null_dereference</code> · <code>array_bounds</code> · <code>integer_overflow</code> · <code>loop_termination</code> · <code>precondition</code> · <code>postcondition</code> · <code>type_constraint</code> · <code>custom</code></p>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- QUICK START -->
+  <section id="quickstart">
+    <div class="section-label">Setup</div>
+    <h2>Quick Start</h2>
+    <p class="section-desc">Prerequisites: Python 3.11+, <a href="https://docs.astral.sh/uv/" style="color:var(--accent)">uv</a>, an OpenAI API key.</p>
+
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <h4>Clone and install</h4>
+          <div class="code-block" style="margin-top:0.5rem">
+            <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+            <pre><code class="language-bash">git clone &lt;repo-url&gt; verification-agents
+cd verification-agents
+uv sync</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <h4>Set your API key</h4>
+          <div class="code-block" style="margin-top:0.5rem">
+            <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+            <pre><code class="language-bash">echo "OPENAI_API_KEY=sk-..." > .env</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <h4>Run against the sample repo</h4>
+          <div class="code-block" style="margin-top:0.5rem">
+            <div class="code-header"><span class="code-lang">bash</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+            <pre><code class="language-bash"># uses ../sample-buggy-app by default
+uv run python run.py
+
+# or point at any repo + branches
+uv run python run.py /path/to/repo main feature/my-branch</code></pre>
+          </div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body">
+          <h4>Use as a library</h4>
+          <div class="code-block" style="margin-top:0.5rem">
+            <div class="code-header"><span class="code-lang">Python</span><button class="code-copy" onclick="copyCode(this)">Copy</button></div>
+            <pre><code class="language-python">from verification_agents.orchestrator import OrchestratorAgent
+from verification_agents.models import UserSelection, VerifiableProperty
+
+def my_handler(question, options: list[VerifiableProperty]) -> UserSelection:
+    # auto-select all for CI / GitHub bot
+    return UserSelection(selected_ids=[o.id for o in options])
+
+agent = OrchestratorAgent(
+    api_key="sk-...",
+    clarification_handler=my_handler,
+    model="gpt-4o",         # default
+    z3_timeout_ms=30_000,   # default
+)
+
+report = agent.run(diff_text, user_intent="check for null dereferences")
+
+print(report.model_dump_json(indent=2))</code></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- LIVE DEMO -->
+  <section id="demo">
+    <div class="section-label">Interactive</div>
+    <h2>Agent Flow Demo</h2>
+    <p class="section-desc">Simulate the agent's tool-use loop against the sample buggy diff. Press Run to watch it step through each tool call.</p>
+
+    <div class="flow-demo">
+      <div class="flow-log" id="flowLog"></div>
+      <div class="flow-controls">
+        <button class="flow-btn" id="flowRunBtn" onclick="runFlowDemo()">▶ Run simulation</button>
+        <button class="flow-btn" onclick="resetFlowDemo()">↺ Reset</button>
+      </div>
+    </div>
+  </section>
+
+</div><!-- /page -->
+
+<footer>
+  <div class="page">
+    Built with GPT-4o · Z3 SMT Solver · tree-sitter · Pydantic · Python 3.11
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+<script>
+/* ── PIPELINE TOGGLE ── */
+function toggleNode(el) {
+  const wasActive = el.classList.contains("active");
+  document.querySelectorAll(".pipe-node").forEach(n => n.classList.remove("active"));
+  if (!wasActive) el.classList.add("active");
+}
+
+/* ── TABS ── */
+function switchTab(e, name) {
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+  e.target.classList.add("active");
+  document.getElementById("tab-" + name).classList.add("active");
+}
+
+/* ── COPY CODE ── */
+function copyCode(btn) {
+  const code = btn.closest(".code-block").querySelector("code").innerText;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = "Copied!";
+    setTimeout(() => btn.textContent = "Copy", 1500);
+  });
+}
+
+/* ── FLOW DEMO ── */
+const FLOW_STEPS = [
+  { delay: 300,  cls: "flow-agent",  text: '[orchestrator]  Received diff: 2 files, 75 lines changed' },
+  { delay: 700,  cls: "flow-tool",   text: '→ tool call     parse_diff(diff="diff --git a/inventory.py ...")' },
+  { delay: 1400, cls: "flow-result", text: '← result        CodeAnalysis: 3 units, 4 call edges, 7 properties' },
+  { delay: 1900, cls: "flow-agent",  text: '[orchestrator]  Found 7 verifiable properties across apply_bulk_discount, get_discount_for_user, process_bulk_orders' },
+  { delay: 2400, cls: "flow-tool",   text: '→ tool call     ask_user(question="I found 7 properties. Which should I verify?", options=[...])' },
+  { delay: 3100, cls: "flow-result", text: '← result        UserSelection: selected_ids=[all 7], extra_notes=""' },
+  { delay: 3600, cls: "flow-agent",  text: '[orchestrator]  User selected all 7 — formalizing into Z3 constraints' },
+  { delay: 4100, cls: "flow-tool",   text: '→ tool call     formalize(selected={...}, code_analysis={...})' },
+  { delay: 5200, cls: "flow-result", text: '← result        5 Z3 constraints encoded successfully (2 skipped: complex loop variants)' },
+  { delay: 5700, cls: "flow-tool",   text: '→ tool call     z3_solve(constraints=[5 items])' },
+  { delay: 7100, cls: "flow-bug",    text: '← result [SAT]  array_bounds in apply_bulk_discount — counterexample: {i: 5, n: 5}' },
+  { delay: 7600, cls: "flow-bug",    text: '← result [SAT]  null_dereference in get_discount_for_user — counterexample: {user_is_not_none: False}' },
+  { delay: 8000, cls: "flow-bug",    text: '← result [SAT]  array_bounds in process_bulk_orders — counterexample: {i: 3, n: 3}' },
+  { delay: 8400, cls: "flow-result", text: '← result [UNSAT] loop_termination in apply_bulk_discount — property holds' },
+  { delay: 8800, cls: "flow-result", text: '← result [UNSAT] loop_termination in process_bulk_orders — property holds' },
+  { delay: 9300, cls: "flow-agent",  text: '[orchestrator]  3 bugs found. Writing severity report and summary...' },
+  { delay: 9800, cls: "flow-tool",   text: '→ tool call     submit_report(results=[...], summary="Three bugs were found...")' },
+  { delay: 10400, cls: "flow-result", text: '← VerificationReport: 3 bugs (2 CRITICAL, 1 CRITICAL), 2 clean, elapsed 18.4s' },
+  { delay: 10800, cls: "flow-agent",  text: '[orchestrator]  Done. Returning report to caller.' },
+];
+
+let flowTimers = [];
+
+function makeLine(step) {
+  const t = new Date();
+  const ts = `${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}:${String(t.getSeconds()).padStart(2,'0')}`;
+  const el = document.createElement("div");
+  el.className = "flow-line";
+  el.innerHTML = `<span class="flow-time">${ts}</span><span class="${step.cls}">${step.text}</span>`;
+  return el;
+}
+
+function runFlowDemo() {
+  const btn = document.getElementById("flowRunBtn");
+  if (btn.classList.contains("running")) return;
+  btn.classList.add("running");
+  btn.textContent = "⏳ Running…";
+
+  const log = document.getElementById("flowLog");
+  log.innerHTML = "";
+
+  FLOW_STEPS.forEach(step => {
+    const t = setTimeout(() => {
+      const line = makeLine(step);
+      log.appendChild(line);
+      requestAnimationFrame(() => requestAnimationFrame(() => line.classList.add("visible")));
+      log.scrollTop = log.scrollHeight;
+    }, step.delay);
+    flowTimers.push(t);
+  });
+
+  const total = FLOW_STEPS[FLOW_STEPS.length - 1].delay + 800;
+  const done = setTimeout(() => {
+    btn.classList.remove("running");
+    btn.textContent = "▶ Run again";
+  }, total);
+  flowTimers.push(done);
+}
+
+function resetFlowDemo() {
+  flowTimers.forEach(clearTimeout);
+  flowTimers = [];
+  document.getElementById("flowLog").innerHTML = "";
+  const btn = document.getElementById("flowRunBtn");
+  btn.classList.remove("running");
+  btn.textContent = "▶ Run simulation";
+}
+</script>
+</body>
+</html>

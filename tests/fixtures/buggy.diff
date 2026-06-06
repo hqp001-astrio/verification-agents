@@ -1,0 +1,37 @@
+diff --git a/processor.py b/processor.py
+index 0000000..1234567 100644
+--- a/processor.py
++++ b/processor.py
+@@ -1,10 +1,40 @@
++def get_element(arr, index):
++    """Return the element at the given index from arr."""
++    return arr[index]
++
++
++def sum_positive(numbers):
++    """Return the sum of all positive numbers in the list."""
++    total = 0
++    i = 0
++    while i < len(numbers):
++        if numbers[i] > 0:
++            total = total + numbers[i]
++        i = i + 1
++    return total
++
++
++def get_username(user):
++    """Return the username of a user object. user may be None."""
++    return user.name
++
++
++def safe_divide(a, b):
++    """Divide a by b. Assumes b is not zero."""
++    return a // b
++
++
++def process_items(items):
++    """Process a list of items and return results."""
++    results = []
++    for i in range(len(items) + 1):
++        results.append(items[i] * 2)
++    return results
