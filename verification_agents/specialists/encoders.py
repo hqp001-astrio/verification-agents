@@ -77,12 +77,15 @@ class TerminationSpec(BaseModel):
 
 
 class DivZeroSpec(BaseModel):
-    denom_var: str = Field(default="denom", description="Name for the symbolic divisor.")
-    guarded: bool = Field(description="Does a guard on EVERY path ensure the divisor is non-zero? "
-                                      "Be precise: `b >= 0` does NOT (b can be 0); `b > 0` and "
-                                      "`b != 0` DO. A guard on `b` does not protect divisor `b-1`.")
-    denom_param: str = Field(default="", description="Parameter whose value IS the divisor, if the "
-                                                     "divisor is exactly a parameter (else empty).")
+    divisor_expr: str = Field(description="The FULL divisor expression exactly as written, e.g. "
+                                          "'b', 'x*x - 5*x + 6', '(x % 7) - 3', '3*x - 12'.")
+    input_constraints: list[str] = Field(
+        default_factory=list,
+        description="Conditions the code GUARANTEES on the path to the division (the guard/range), "
+                    "each a Python comparison over the parameters, e.g. ['0 <= x', 'x < 10']. Use "
+                    "[] if the division is reached with no guard. Do NOT include the non-zero "
+                    "condition itself — that is the property being checked.",
+    )
 
 
 _SPEC_BY_CONCERN: dict[PropertyKind, type[BaseModel]] = {
@@ -127,12 +130,14 @@ _SYSTEM_PROMPTS: dict[PropertyKind, str] = {
         "and whether it is bounded below. Ignore every other concern."
     ),
     PropertyKind.DIVISION_BY_ZERO: (
-        "You are the DIVISION-BY-ZERO specialist. Look ONLY at the division/modulo "
-        "operation. Identify the DIVISOR expression and decide whether a guard on every "
-        "path guarantees it is non-zero. Be precise about the guard: `b >= 0` does NOT "
-        "guarantee non-zero (b can be 0); `b > 0` and `b != 0` DO. A guard on `b` does "
-        "NOT protect a divisor of `b - 1`. If the divisor is exactly a parameter, set "
-        "denom_param to it. Ignore every other concern."
+        "You are the DIVISION-BY-ZERO specialist. For the division/modulo operation, "
+        "report two things, copied FAITHFULLY from the code:\n"
+        "  - divisor_expr: the FULL divisor expression exactly as written (e.g. 'b', "
+        "'x*x - 5*x + 6', '(x % 7) - 3').\n"
+        "  - input_constraints: the conditions the code guarantees on the path to the "
+        "division (the guard/range), each a Python comparison, e.g. ['0 <= x', 'x < 10']. "
+        "Use [] if the division is reached with NO guard. Do NOT add the non-zero "
+        "condition yourself — the solver checks that. Ignore every other concern."
     ),
 }
 
@@ -208,15 +213,28 @@ def _build_overflow(spec: OverflowSpec, ctx: z3.Context):
 
 
 def _build_divzero(spec: DivZeroSpec, ctx: z3.Context):
-    # Name the symbolic divisor after the parameter (when the divisor IS a param) so
-    # the counterexample maps straight back to a concrete input for the executor.
-    name = spec.denom_param or spec.denom_var
-    denom = z3.Int(name, ctx)
-    safety = denom != 0
-    reachable = (denom != 0) if spec.guarded else z3.BoolVal(True, ctx)
-    violation = z3.And(reachable, z3.Not(safety))   # guarded -> UNSAT; unguarded -> denom == 0
-    var_binding = {"denom_param": spec.denom_param, "denom_var": name}
-    return violation, str(reachable), f"{name} != 0", var_binding
+    # Compile the ACTUAL divisor expression and guard range to Z3 (same safe AST
+    # compiler the generalist uses), so compound divisors like x*x-5*x+6 are solved
+    # exactly. The LLM only copied strings; Z3 does the arithmetic. The counterexample
+    # is in terms of the real parameters, so the executor can reproduce it by name.
+    from verification_agents.specialists.generalist import (
+        TranslationError,
+        compile_predicate,
+    )
+
+    env: dict = {}
+    try:
+        divisor = compile_predicate(spec.divisor_expr, env, ctx)
+        constraints = [compile_predicate(c, env, ctx) for c in spec.input_constraints]
+    except TranslationError:
+        # divisor isn't arithmetic we can model -> conservatively flag as unguarded
+        d = z3.Int("divisor", ctx)
+        return z3.And(z3.BoolVal(True, ctx), d == 0), "true", "divisor != 0", {}
+
+    reachable = z3.And(*constraints) if constraints else z3.BoolVal(True, ctx)
+    safety = divisor != 0
+    violation = z3.And(reachable, z3.Not(safety))   # reachable AND divisor == 0
+    return violation, str(reachable), f"({spec.divisor_expr}) != 0", {}
 
 
 def _build_termination(spec: TerminationSpec, ctx: z3.Context):
@@ -318,13 +336,13 @@ def _extract_heuristic(concern: PropertyKind, prop: VerifiableProperty,
         return TerminationSpec(decreases=decreases, bounded_below=bounded)
 
     if concern == PropertyKind.DIVISION_BY_ZERO:
-        # crude offline guard detection: a `!= 0` or `> 0` check suggests guarded.
+        # offline: grab the divisor token after the first / or % ; assume guarded if a
+        # `!= 0` / `> 0` check is present near it.
+        m = re.search(r"[/%]\s*([A-Za-z_]\w*)", src)
+        divisor = m.group(1) if m else "b"
         guarded = bool(re.search(r"!=\s*0", src)) or bool(re.search(r">\s*0", src))
-        m = re.search(r"def\s+\w+\(([^)]*)\)", src)
-        params = [p.strip().split(":")[0].split("=")[0].strip()
-                  for p in (m.group(1).split(",") if m else [])]
-        denom = next((p for p in reversed(params) if p not in ("self", "")), "")
-        return DivZeroSpec(guarded=guarded, denom_param=denom)
+        constraints = [f"{divisor} != 0"] if guarded else []
+        return DivZeroSpec(divisor_expr=divisor, input_constraints=constraints)
 
     raise ValueError(f"No heuristic for concern {concern}")
 

@@ -75,10 +75,10 @@ class GeneralModel(BaseModel):
 
 GENERALIST_SYSTEM = (
     "You are the GENERALIST verification agent. The specialists already cover array "
-    "bounds, null dereference, integer overflow, division/modulo by zero, and loop "
-    "termination — do NOT repeat those. Find ANY OTHER checkable safety/correctness "
-    "property in the function: dictionary key presence, value-range invariants, "
-    "monotonicity, sign constraints, postconditions, etc.\n\n"
+    "bounds, null dereference, integer overflow, division/modulo by zero (including "
+    "compound divisors), and loop termination — do NOT repeat those. Find ANY OTHER "
+    "checkable safety/correctness property: dictionary key presence, value-range "
+    "invariants, monotonicity, sign constraints, postconditions, etc.\n\n"
     "Output a small formal model: typed variables, reachable-state `assumptions`, and "
     "one or more `checks` whose `safety` predicate must ALWAYS hold.\n\n"
     "CRITICAL — assumptions: list ONLY conditions the code ITSELF enforces before the "
