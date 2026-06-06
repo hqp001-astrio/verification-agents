@@ -14,6 +14,8 @@ on unchanged functions are served from the Redis abstraction memory.
 
 from __future__ import annotations
 
+import ast
+import builtins
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -23,6 +25,7 @@ import z3
 from verification_agents.models import (
     CodeAnalysis,
     CodeUnit,
+    Language,
     PropertyKind,
     SolverStatus,
     VerifiableProperty,
@@ -196,9 +199,42 @@ def _process_generalist(
 # no. Concerns without an executor (overflow, termination) report SAT as a finding.
 _EXECUTABLE_CONCERNS = {PropertyKind.ARRAY_BOUNDS, PropertyKind.NULL_DEREFERENCE}
 
+_BUILTINS = set(dir(builtins))
+
+
+def _has_external_deps(unit: CodeUnit) -> bool:
+    """True if the function reads a name that is not a parameter, a local, or a
+    builtin — i.e. its behaviour depends on state not in scope (a global, an
+    undefined helper). We must never claim such a function 'safe'."""
+    try:
+        tree = ast.parse(unit.source)
+    except SyntaxError:
+        return False
+    func = next((n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+    if func is None:
+        return False
+    bound = set(_BUILTINS)
+    bound.update(a.arg for a in func.args.args)
+    bound.update(a.arg for a in func.args.kwonlyargs)
+    if func.args.vararg:
+        bound.add(func.args.vararg.arg)
+    if func.args.kwarg:
+        bound.add(func.args.kwarg.arg)
+    for n in ast.walk(func):
+        if isinstance(n, ast.Assign):
+            bound.update(t.id for t in ast.walk(n) if isinstance(t, ast.Name))
+        elif isinstance(n, (ast.For, ast.comprehension)) and isinstance(n.target, ast.Name):
+            bound.add(n.target.id)
+    for n in ast.walk(func):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in bound:
+            return True
+    return False
+
 
 @_op("specialist.aggregate")
-def aggregate(outcomes: list[ColumnOutcome], job_id: str, elapsed_s: float) -> ColumnsReport:
+def aggregate(outcomes: list[ColumnOutcome], job_id: str, elapsed_s: float,
+              external_deps: bool = False) -> ColumnsReport:
     bugs: list[ColumnOutcome] = []          # confirmed or template-sound -> drives NO
     proposed: list[ColumnOutcome] = []      # generalist, unverified translation -> drives UNSURE
     clean: list[ColumnOutcome] = []
@@ -222,13 +258,13 @@ def aggregate(outcomes: list[ColumnOutcome], job_id: str, elapsed_s: float) -> C
             inconclusive.append(o)                   # UNKNOWN / translation error
 
     if bugs:
-        decision = DECISION_NO
-    elif proposed or inconclusive:
-        decision = DECISION_UNSURE
-    elif clean:
-        decision = DECISION_YES
+        decision = DECISION_NO              # confirmed / template-sound violation
+    elif proposed:
+        decision = DECISION_UNSURE          # generalist found something it couldn't verify
+    elif clean and not external_deps:
+        decision = DECISION_YES             # a Z3 proof stands; refuted/unknown don't veto it
     else:
-        decision = DECISION_UNSURE
+        decision = DECISION_UNSURE          # external dependency, or no proof either way
 
     # Columns that ran, grouped by concern.
     by_concern: dict[PropertyKind, SpecialistColumn] = {}
@@ -344,11 +380,22 @@ def verify(
 
     unit_by_name = {u.name: u for u in code_analysis.units}
     selected = set(selected_ids) if selected_ids else None
-    prop_work = [
-        (p, unit_by_name.get(p.unit_name))
-        for p in code_analysis.properties
-        if p.kind in encoders.CONCERN_LABEL and (selected is None or p.id in selected)
-    ]
+    # Integer overflow is a fixed-width concern; Python/JS numbers don't wrap, so
+    # skip the overflow specialist there to avoid false positives on arithmetic.
+    _no_overflow = {Language.PYTHON, Language.JAVASCRIPT}
+
+    def _applicable(p: VerifiableProperty) -> bool:
+        if p.kind not in encoders.CONCERN_LABEL:
+            return False
+        if selected is not None and p.id not in selected:
+            return False
+        unit = unit_by_name.get(p.unit_name)
+        if p.kind == PropertyKind.INTEGER_OVERFLOW and unit and unit.language in _no_overflow:
+            return False
+        return True
+
+    prop_work = [(p, unit_by_name.get(p.unit_name)) for p in code_analysis.properties
+                 if _applicable(p)]
     # The generalist runs once per changed function, covering everything the
     # specialists don't. Skipped when there's no API key (no offline heuristic).
     gen_units = list(code_analysis.units) if (api_key and not selected) else []
@@ -371,7 +418,8 @@ def verify(
                 outcomes.extend(f.result())
 
     job.set_status("aggregating")
-    report = aggregate(outcomes, job_id, time.monotonic() - start)
+    external = any(_has_external_deps(u) for u in code_analysis.units)
+    report = aggregate(outcomes, job_id, time.monotonic() - start, external_deps=external)
     report.backend = job.backend
 
     job.set_status("done")
