@@ -147,6 +147,9 @@ def _process_property(
     if outcome.status == SolverStatus.SAT:
         confirmed, detail = executor.reproduce(prop.kind, unit, constraint.var_binding,
                                                outcome.counterexample)
+        if confirmed is None:
+            # fall back to mapping the counterexample to params by name
+            confirmed, detail = executor.reproduce_generic(unit, outcome.counterexample)
         outcome.execution_confirmed = confirmed
         outcome.execution_detail = detail
 
@@ -197,7 +200,11 @@ def _process_generalist(
 # execution to confirm a SAT before calling it a bug; an unconfirmed violation is
 # reported as unsure (couldn't ground it — e.g. an external dependency), not a hard
 # no. Concerns without an executor (overflow, termination) report SAT as a finding.
-_EXECUTABLE_CONCERNS = {PropertyKind.ARRAY_BOUNDS, PropertyKind.NULL_DEREFERENCE}
+_EXECUTABLE_CONCERNS = {
+    PropertyKind.ARRAY_BOUNDS,
+    PropertyKind.NULL_DEREFERENCE,
+    PropertyKind.DIVISION_BY_ZERO,
+}
 
 _BUILTINS = set(dir(builtins))
 

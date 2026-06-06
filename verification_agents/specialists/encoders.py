@@ -76,10 +76,20 @@ class TerminationSpec(BaseModel):
     bounded_below: bool = Field(description="Is the variant bounded below (e.g. >= 0)?")
 
 
+class DivZeroSpec(BaseModel):
+    denom_var: str = Field(default="denom", description="Name for the symbolic divisor.")
+    guarded: bool = Field(description="Does a guard on EVERY path ensure the divisor is non-zero? "
+                                      "Be precise: `b >= 0` does NOT (b can be 0); `b > 0` and "
+                                      "`b != 0` DO. A guard on `b` does not protect divisor `b-1`.")
+    denom_param: str = Field(default="", description="Parameter whose value IS the divisor, if the "
+                                                     "divisor is exactly a parameter (else empty).")
+
+
 _SPEC_BY_CONCERN: dict[PropertyKind, type[BaseModel]] = {
     PropertyKind.ARRAY_BOUNDS: BoundsSpec,
     PropertyKind.NULL_DEREFERENCE: NullSpec,
     PropertyKind.INTEGER_OVERFLOW: OverflowSpec,
+    PropertyKind.DIVISION_BY_ZERO: DivZeroSpec,
     PropertyKind.LOOP_TERMINATION: TerminationSpec,
 }
 
@@ -87,6 +97,7 @@ CONCERN_LABEL: dict[PropertyKind, str] = {
     PropertyKind.ARRAY_BOUNDS: "bounds",
     PropertyKind.NULL_DEREFERENCE: "null",
     PropertyKind.INTEGER_OVERFLOW: "overflow",
+    PropertyKind.DIVISION_BY_ZERO: "div_zero",
     PropertyKind.LOOP_TERMINATION: "termination",
     PropertyKind.CUSTOM: "generalist",
 }
@@ -114,6 +125,14 @@ _SYSTEM_PROMPTS: dict[PropertyKind, str] = {
         "You are the LOOP-TERMINATION specialist. Look ONLY at the loop. Identify the "
         "variant (decreasing quantity), whether it strictly decreases each iteration, "
         "and whether it is bounded below. Ignore every other concern."
+    ),
+    PropertyKind.DIVISION_BY_ZERO: (
+        "You are the DIVISION-BY-ZERO specialist. Look ONLY at the division/modulo "
+        "operation. Identify the DIVISOR expression and decide whether a guard on every "
+        "path guarantees it is non-zero. Be precise about the guard: `b >= 0` does NOT "
+        "guarantee non-zero (b can be 0); `b > 0` and `b != 0` DO. A guard on `b` does "
+        "NOT protect a divisor of `b - 1`. If the divisor is exactly a parameter, set "
+        "denom_param to it. Ignore every other concern."
     ),
 }
 
@@ -188,6 +207,18 @@ def _build_overflow(spec: OverflowSpec, ctx: z3.Context):
     return violation, str(reachable), f"{lo} <= ({names[0]} {spec.operator} ...) <= {hi}", var_binding
 
 
+def _build_divzero(spec: DivZeroSpec, ctx: z3.Context):
+    # Name the symbolic divisor after the parameter (when the divisor IS a param) so
+    # the counterexample maps straight back to a concrete input for the executor.
+    name = spec.denom_param or spec.denom_var
+    denom = z3.Int(name, ctx)
+    safety = denom != 0
+    reachable = (denom != 0) if spec.guarded else z3.BoolVal(True, ctx)
+    violation = z3.And(reachable, z3.Not(safety))   # guarded -> UNSAT; unguarded -> denom == 0
+    var_binding = {"denom_param": spec.denom_param, "denom_var": name}
+    return violation, str(reachable), f"{name} != 0", var_binding
+
+
 def _build_termination(spec: TerminationSpec, ctx: z3.Context):
     variant = z3.Int(spec.variant_var, ctx)
     nxt = z3.Int(spec.variant_var + "_next", ctx)
@@ -206,6 +237,7 @@ _BUILDERS = {
     PropertyKind.ARRAY_BOUNDS: _build_bounds,
     PropertyKind.NULL_DEREFERENCE: _build_null,
     PropertyKind.INTEGER_OVERFLOW: _build_overflow,
+    PropertyKind.DIVISION_BY_ZERO: _build_divzero,
     PropertyKind.LOOP_TERMINATION: _build_termination,
 }
 
@@ -284,6 +316,15 @@ def _extract_heuristic(concern: PropertyKind, prop: VerifiableProperty,
         decreases = ("range(" in src) or "-= 1" in src or "- 1" in src
         bounded = "range(" in src or ">= 0" in src
         return TerminationSpec(decreases=decreases, bounded_below=bounded)
+
+    if concern == PropertyKind.DIVISION_BY_ZERO:
+        # crude offline guard detection: a `!= 0` or `> 0` check suggests guarded.
+        guarded = bool(re.search(r"!=\s*0", src)) or bool(re.search(r">\s*0", src))
+        m = re.search(r"def\s+\w+\(([^)]*)\)", src)
+        params = [p.strip().split(":")[0].split("=")[0].strip()
+                  for p in (m.group(1).split(",") if m else [])]
+        denom = next((p for p in reversed(params) if p not in ("self", "")), "")
+        return DivZeroSpec(guarded=guarded, denom_param=denom)
 
     raise ValueError(f"No heuristic for concern {concern}")
 

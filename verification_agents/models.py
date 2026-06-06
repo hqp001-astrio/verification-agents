@@ -31,6 +31,7 @@ class PropertyKind(str, Enum):
     NULL_DEREFERENCE = "null_dereference"
     ARRAY_BOUNDS = "array_bounds"
     INTEGER_OVERFLOW = "integer_overflow"
+    DIVISION_BY_ZERO = "division_by_zero"
     LOOP_TERMINATION = "loop_termination"
     PRECONDITION = "precondition"
     POSTCONDITION = "postcondition"

@@ -104,15 +104,16 @@ def _metrics(preds: list[str], golds: list[str]) -> dict:
 
 
 @_op("eval.run")
-def run() -> dict:
+def run(cases: list[Case] | None = None) -> dict:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise SystemExit("OPENAI_API_KEY required for the eval")
+    cases = cases or CASES
 
-    golds = [c.label for c in CASES]
+    golds = [c.label for c in cases]
     base_preds, ver_preds, grounded = [], [], 0
     rows = []
-    for case in CASES:
+    for case in cases:
         b = base_llm(case, api_key)
         v = verifier(case, api_key)
         base_preds.append(b)
@@ -121,9 +122,10 @@ def run() -> dict:
         rows.append((case.name, case.label, b, v["decision"], v["grounded"]))
 
     bm, vm = _metrics(base_preds, golds), _metrics(ver_preds, golds)
-    n = len(CASES)
+    n = len(cases)
 
-    print(f"\n{'case':20} {'gold':7} {'base':7} {'verifier':9} grounded")
+    print(f"\nmodel: {_MODEL}    dataset: {len(cases)} cases")
+    print(f"{'case':22} {'gold':7} {'base':7} {'verifier':9} grounded")
     print("-" * 56)
     for name, gold, b, v, g in rows:
         flag = lambda p: "✓" if p == gold else "✗"  # noqa: E731
@@ -137,9 +139,21 @@ def run() -> dict:
 
 
 if __name__ == "__main__":
+    import sys
+
     if _HAS_WEAVE and os.environ.get("WANDB_API_KEY"):
         try:
             weave.init(os.environ.get("WEAVE_PROJECT", "astrio/verification-agents"))
         except Exception as exc:
             print(f"[eval] weave disabled: {exc}")
-    run()
+
+    chosen = CASES
+    if "--hard" in sys.argv:
+        from verification_agents.eval.dataset_hard import CASES_HARD
+
+        chosen = CASES_HARD
+    elif "--all" in sys.argv:
+        from verification_agents.eval.dataset_hard import CASES_HARD
+
+        chosen = CASES + CASES_HARD
+    run(chosen)

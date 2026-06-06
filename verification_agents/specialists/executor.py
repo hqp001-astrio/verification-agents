@@ -41,6 +41,7 @@ def _op(name: str):
 _TARGET_ERRORS = {
     PropertyKind.ARRAY_BOUNDS: ("IndexError", "KeyError"),
     PropertyKind.NULL_DEREFERENCE: ("AttributeError", "TypeError"),
+    PropertyKind.DIVISION_BY_ZERO: ("ZeroDivisionError",),
 }
 
 _HARNESS = '''\
@@ -107,6 +108,15 @@ def _build_call(concern: PropertyKind, fn_name: str, params: list[str],
             return None
         for p in params:
             args.append("None" if p == object_param else "0")
+        return f"{fn_name}({', '.join(args)})"
+
+    if concern == PropertyKind.DIVISION_BY_ZERO:
+        denom_param = var_binding.get("denom_param") or ""
+        if not denom_param:
+            return None  # divisor is an expression, not a bare param -> can't ground simply
+        # set the divisor parameter to 0, others to 1 (avoid unrelated div-by-zero)
+        for p in params:
+            args.append("0" if p == denom_param else "1")
         return f"{fn_name}({', '.join(args)})"
 
     return None

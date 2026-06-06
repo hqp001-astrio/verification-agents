@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 import uuid
 
-import tree_sitter_python as tspython
 import tree_sitter_javascript as tsjavascript
-from tree_sitter import Language as TSLanguage, Parser
+import tree_sitter_python as tspython
+from tree_sitter import Language as TSLanguage
+from tree_sitter import Parser
 
 from verification_agents.models import (
     CallEdge,
@@ -206,8 +207,21 @@ def _discover_properties(
                             f"`{node.text.decode()[:80]}` — verify object is not None/null",
             ))
         elif t == "binary_operator" and lang == Language.PYTHON:
-            op_nodes = [c for c in node.children if c.type == "operator"]
-            if op_nodes and op_nodes[0].text.decode() in _ARITH_OPS:
+            # the operator child's node type is the symbol itself (e.g. "/"), not
+            # "operator", so fetch it by field name.
+            op_node = node.child_by_field_name("operator")
+            op = op_node.text.decode() if op_node else ""
+            if op in {"/", "//", "%"}:
+                props.append(VerifiableProperty(
+                    id=str(uuid.uuid4()),
+                    kind=PropertyKind.DIVISION_BY_ZERO,
+                    unit_name=unit.name,
+                    filename=unit.filename,
+                    start_line=unit.start_line + node.start_point[0],
+                    description=f"Division/modulo in `{unit.name}`: "
+                                f"`{node.text.decode()[:80]}` — verify divisor is non-zero",
+                ))
+            elif op in _ARITH_OPS:
                 props.append(VerifiableProperty(
                     id=str(uuid.uuid4()),
                     kind=PropertyKind.INTEGER_OVERFLOW,
