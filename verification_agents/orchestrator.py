@@ -6,13 +6,14 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+import weave
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
 from verification_agents.models import UserSelection, VerifiableProperty, VerificationReport
-from verification_agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT, build_initial_message
+from verification_agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT, build_initial_message, build_preanalyzed_message
 from verification_agents.tools import ask_user as _ask_user_mod
 from verification_agents.tools import formalize as _formalize_mod
 from verification_agents.tools import parse_diff as _parse_diff_mod
@@ -133,14 +134,29 @@ class OrchestratorAgent:
         model: str = "gpt-4o",
         max_turns: int = 20,
         z3_timeout_ms: int = 30_000,
+        weave_project: str | None = "astrio/verification-agents",
     ) -> None:
         self.api_key = api_key
         self.clarification_handler = clarification_handler
         self.model = model
         self.max_turns = max_turns
         self.z3_timeout_ms = z3_timeout_ms
+        self._weave_enabled = False
+        if weave_project:
+            try:
+                weave.init(weave_project)
+                self._weave_enabled = True
+            except Exception as exc:
+                print(f"[weave] tracing disabled: {exc}")
 
-    def run(self, diff: str, user_intent: str = "") -> VerificationReport:
+    @weave.op()
+    def run(
+        self,
+        diff: str,
+        user_intent: str = "",
+        code_analysis: Any | None = None,
+        user_selection: Any | None = None,
+    ) -> VerificationReport:
         _formalize_mod.clear_store()
         start = time.monotonic()
         report_box: list[VerificationReport | None] = [None]
@@ -156,15 +172,29 @@ class OrchestratorAgent:
 
         llm = ChatOpenAI(api_key=self.api_key, model=self.model, temperature=0)
 
+        from weave.integrations.langchain import WeaveTracer  # noqa: PLC0415
+
         graph = create_agent(
             model=llm,
             tools=tools,
             system_prompt=ORCHESTRATOR_SYSTEM_PROMPT,
         )
 
+        if code_analysis is not None and user_selection is not None:
+            import json as _json  # noqa: PLC0415
+            initial_content = build_preanalyzed_message(
+                _json.dumps(code_analysis),
+                _json.dumps(user_selection),
+            )
+        else:
+            initial_content = build_initial_message(diff, user_intent)
+
         graph.invoke(
-            {"messages": [{"role": "user", "content": build_initial_message(diff, user_intent)}]},
-            config={"recursion_limit": self.max_turns * 3},
+            {"messages": [{"role": "user", "content": initial_content}]},
+            config={
+                "recursion_limit": self.max_turns * 3,
+                "callbacks": [WeaveTracer()],
+            },
         )
 
         if report_box[0] is None:

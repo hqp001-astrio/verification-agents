@@ -12,7 +12,9 @@ dependencies = [
     "openai>=2.41.0",
     "langchain>=0.3.0",
     "langchain-openai>=0.2.0",
-    "wandb>=0.27.2",
+    "weave>=0.51.0",
+    "questionary>=2.1.1",
+    "rich>=15.0.0",
 ]
 
 [project.optional-dependencies]
