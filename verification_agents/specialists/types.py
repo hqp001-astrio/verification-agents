@@ -64,6 +64,18 @@ class ColumnConstraint(BaseModel):
     note: str = ""
 
 
+class ProofWitness(BaseModel):
+    """Evidence that Z3 refuted the violation condition (UNSAT path).
+
+    When Z3 cannot satisfy ``reachable ∧ ¬safety`` it has proven that no
+    reachable state can violate the safety property — this object packages
+    that certificate for the UI.
+    """
+    safety: str       # the predicate proven to always hold
+    reachable: str    # assumption (reachable-state envelope) under which it holds
+    runtime_ms: float # wall-clock proof time
+
+
 class ColumnOutcome(BaseModel):
     """A constraint after solving (and, for SAT, after execution)."""
 
@@ -83,6 +95,7 @@ class ColumnOutcome(BaseModel):
 
     reachable: str = ""
     safety: str = ""
+    proof_witness: ProofWitness | None = None  # set on UNSAT: Z3 proof certificate
     # Execution of the counterexample against the real function:
     #   True  -> reproduced (confirmed bug)
     #   False -> ran clean (spurious counterexample; abstraction over-approximated)

@@ -31,7 +31,6 @@ from verification_agents.models import (
     VerifiableProperty,
 )
 from verification_agents.specialists import encoders, executor, generalist
-from verification_agents.specialists.challenger import challenge as _challenge
 from verification_agents.specialists.redis_store import JobStore
 from verification_agents.specialists.types import (
     DECISION_NO,
@@ -40,6 +39,7 @@ from verification_agents.specialists.types import (
     ColumnOutcome,
     ColumnsReport,
     ExprStore,
+    ProofWitness,
     SpecialistColumn,
 )
 
@@ -104,7 +104,12 @@ def solve_constraint(constraint, store: ExprStore, timeout_ms: int) -> ColumnOut
         ce = {str(d.name()): str(model[d]) for d in model.decls()}
         return ColumnOutcome(status=SolverStatus.SAT, counterexample=ce, runtime_ms=runtime_ms, **base)
     if check == z3.unsat:
-        return ColumnOutcome(status=SolverStatus.UNSAT, runtime_ms=runtime_ms, **base)
+        pw = ProofWitness(
+            safety=constraint.safety,
+            reachable=constraint.reachable,
+            runtime_ms=runtime_ms,
+        )
+        return ColumnOutcome(status=SolverStatus.UNSAT, runtime_ms=runtime_ms, proof_witness=pw, **base)
     return ColumnOutcome(status=SolverStatus.UNKNOWN, runtime_ms=runtime_ms,
                          error="z3 unknown (timeout/undecidable)", **base)
 
@@ -154,19 +159,10 @@ def _process_property(
         outcome.execution_confirmed = confirmed
         outcome.execution_detail = detail
 
-        # Challenger agent: second opinion — is this a real safety concern or a mistranslation?
-        if api_key:
-            cr = _challenge(constraint.safety, constraint.reachable, unit, api_key)
-            outcome.challenger_valid = cr.valid
-            outcome.challenger_issue = cr.issue
-            job.publish({"stage": "challenge", "concern": concern_label, "unit": prop.unit_name,
-                         "challenger_valid": cr.valid, "challenger_issue": cr.issue})
-
     job.memory_put(fn_hash, prop.kind.value, outcome.model_dump())
     job.publish({"stage": "property", "concern": concern_label, "unit": prop.unit_name,
                  "status": outcome.status.value,
-                 "execution_confirmed": outcome.execution_confirmed,
-                 "challenger_valid": outcome.challenger_valid, "cached": False})
+                 "execution_confirmed": outcome.execution_confirmed, "cached": False})
     return [outcome]
 
 
@@ -197,17 +193,8 @@ def _process_generalist(
             outcome.execution_confirmed = confirmed
             outcome.execution_detail = detail
 
-            # Challenger agent: generalist findings especially need a second opinion
-            if api_key:
-                cr = _challenge(c.safety, c.reachable, unit, api_key)
-                outcome.challenger_valid = cr.valid
-                outcome.challenger_issue = cr.issue
-                job.publish({"stage": "challenge", "concern": "generalist", "unit": unit.name,
-                             "challenger_valid": cr.valid, "challenger_issue": cr.issue})
-
         job.publish({"stage": "property", "concern": "generalist", "unit": unit.name,
-                     "status": outcome.status.value,
-                     "challenger_valid": outcome.challenger_valid, "cached": False})
+                     "status": outcome.status.value, "cached": False})
         outcomes.append(outcome)
     return outcomes
 
@@ -269,10 +256,7 @@ def aggregate(outcomes: list[ColumnOutcome], job_id: str, elapsed_s: float,
 
     for o in outcomes:
         if o.status == SolverStatus.SAT:
-            # Challenger said this is a mistranslation — demote before anything else
-            if o.challenger_valid is False:
-                inconclusive.append(o)               # challenger-rejected: wrong formalization
-            elif o.execution_confirmed is True:
+            if o.execution_confirmed is True:
                 bugs.append(o)                       # reproduced on the real function -> sound bug
             elif o.execution_confirmed is False:
                 inconclusive.append(o)               # spurious -> a mistranslation we CAUGHT
