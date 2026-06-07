@@ -90,6 +90,13 @@ class ColumnOutcome(BaseModel):
     execution_confirmed: bool | None = None
     execution_detail: str = ""
 
+    # Challenger agent verdict (only set when status == SAT):
+    #   True  -> challenger confirms this is a real, faithfully-formalized concern
+    #   False -> challenger flagged it as a mistranslation / false positive
+    #   None  -> challenger was not run (no api_key, or non-SAT result)
+    challenger_valid: bool | None = None
+    challenger_issue: str = ""
+
 
 class SpecialistColumn(BaseModel):
     """Bookkeeping for one specialist that ran in this pipeline."""

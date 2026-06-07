@@ -1,4 +1,4 @@
-"""FastAPI backend for the verification UI (CopilotKit).
+"""FastAPI backend for the verification UI.
 
 Endpoints
 ---------
@@ -6,11 +6,25 @@ Endpoints
                                 or background with ``wait=false`` -> returns a job id)
 - ``GET  /api/jobs/{id}``       current status, or the full report once done
 - ``GET  /api/jobs/{id}/events``replayable list of stage events
-- ``GET  /api/jobs/{id}/stream``Server-Sent Events: live stage-by-stage fan-out
+- ``WS   /api/jobs/{id}/ws``    WebSocket: live stage events (server->client) +
+                                clarification responses (client->server)
 - ``GET  /health``              service + Redis + Weave status
 
 The frontend reads its data from here and Redis — not from Weave (Weave is the trace
 recorder; the report carries a ``weave_trace_url`` to link out to it).
+
+WebSocket message protocol
+--------------------------
+Server -> client  (JSON):
+  every event from JobStore.events(), e.g.
+    {"stage": "status", "status": "solving", ...}
+    {"stage": "property", "concern": "array_bounds", "status": "sat", ...}
+    {"stage": "clarification_needed", "question": "...", "options": [...]}
+    {"stage": "done", ...}
+    {"stage": "end"}   <- final sentinel
+
+Client -> server  (JSON):
+    {"type": "clarification_response", "selection": {"selected_ids": [...], "extra_notes": ""}}
 
 Run: ``uv run uvicorn verification_agents.api:app --reload``
 """
@@ -25,11 +39,11 @@ import uuid
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from verification_agents.models import UserSelection, VerifiableProperty
 from verification_agents.specialists.redis_store import JobStore
 from verification_agents.specialists.verify import verify
 from verification_agents.tools import parse_diff as _parse_diff
@@ -38,6 +52,29 @@ load_dotenv()
 
 _MODEL = os.environ.get("VERIFY_MODEL", "gpt-4o-mini")
 _weave_enabled = False
+
+# Bridges the synchronous ask_user tool (runs in a background thread) to the
+# async WebSocket handler. Keyed by job_id.
+_CLARIFICATION_WAITERS: dict[str, threading.Event] = {}
+_CLARIFICATION_RESPONSES: dict[str, dict] = {}
+
+
+def _ws_clarification_handler(job_id: str):
+    """Return a ClarificationHandler that pauses the agent until the frontend replies."""
+    def handler(question: str, props: list[VerifiableProperty]) -> UserSelection:
+        store = JobStore(job_id)
+        store.publish({
+            "stage": "clarification_needed",
+            "question": question,
+            "options": [p.model_dump() for p in props],
+        })
+        ev = threading.Event()
+        _CLARIFICATION_WAITERS[job_id] = ev
+        ev.wait(timeout=300)  # 5-minute window for the user to respond
+        _CLARIFICATION_WAITERS.pop(job_id, None)
+        raw = _CLARIFICATION_RESPONSES.pop(job_id, {"selected_ids": [], "extra_notes": "timeout"})
+        return UserSelection(**raw)
+    return handler
 
 
 @asynccontextmanager
@@ -125,7 +162,7 @@ def analyze(req: AnalyzeRequest) -> dict:
         return report.model_dump()
 
     threading.Thread(target=_run_verify, args=(analysis, job_id), daemon=True).start()
-    return {"job_id": job_id, "status": "queued", "stream": f"/api/jobs/{job_id}/stream"}
+    return {"job_id": job_id, "status": "queued", "ws": f"/api/jobs/{job_id}/ws"}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -149,20 +186,37 @@ def get_events(job_id: str) -> dict:
     return {"job_id": job_id, "events": events}
 
 
-@app.get("/api/jobs/{job_id}/stream")
-async def stream(job_id: str) -> StreamingResponse:
-    async def gen():
-        store = JobStore(job_id)
+@app.websocket("/api/jobs/{job_id}/ws")
+async def ws_job(job_id: str, ws: WebSocket) -> None:
+    await ws.accept()
+    store = JobStore(job_id)
+    if not store.get_status() and not store.get_context():
+        await ws.send_json({"error": "unknown job"})
+        await ws.close()
+        return
+
+    async def _stream() -> None:
         sent, waited = 0, 0.0
         while waited < 180:
             events = store.events()
             for e in events[sent:]:
-                yield f"data: {json.dumps(e)}\n\n"
+                await ws.send_json(e)
             sent = len(events)
             if any(e.get("stage") == "done" for e in events):
                 break
             await asyncio.sleep(0.25)
             waited += 0.25
-        yield "event: end\ndata: {}\n\n"
+        await ws.send_json({"stage": "end"})
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    stream_task = asyncio.create_task(_stream())
+    try:
+        async for msg in ws.iter_json():
+            if msg.get("type") == "clarification_response":
+                _CLARIFICATION_RESPONSES[job_id] = msg["selection"]
+                ev = _CLARIFICATION_WAITERS.pop(job_id, None)
+                if ev:
+                    ev.set()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        stream_task.cancel()

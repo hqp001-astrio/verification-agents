@@ -102,3 +102,4 @@ class VerificationReport(BaseModel):
     summary: str = ""
     total_properties_checked: int = 0
     elapsed_s: float = 0.0
+    weave_trace_url: str = ""

@@ -12,8 +12,9 @@ from langchain.agents import create_agent
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from verification_agents.models import UserSelection, VerifiableProperty, VerificationReport
+from verification_agents.models import CodeUnit, Language, UserSelection, VerifiableProperty, VerificationReport
 from verification_agents.prompts import ORCHESTRATOR_SYSTEM_PROMPT, build_initial_message, build_preanalyzed_message
+from verification_agents.specialists.challenger import challenge as _challenger_challenge
 from verification_agents.tools import ask_user as _ask_user_mod
 from verification_agents.tools import formalize as _formalize_mod
 from verification_agents.tools import parse_diff as _parse_diff_mod
@@ -122,7 +123,31 @@ def _build_tools(
         except Exception as exc:
             return f"Error: {exc}"
 
-    return [parse_diff, ask_user, formalize, z3_solve, submit_report,
+    @tool
+    def challenge_finding(safety: str, reachable: str, unit_source: str = "") -> str:
+        """Call the CHALLENGER agent to review a SAT finding before reporting it as a bug.
+
+        The Challenger is an independent LLM that decides whether the safety predicate
+        faithfully formalizes a real concern in the code, or whether it is a mistranslation
+        (wrong variables, inverted logic, trivially guaranteed by structure).
+
+        Call this for EVERY SAT result from z3_solve before calling submit_report.
+        Pass the safety predicate, the reachable-state assumption, and the source of the
+        function under review. Returns {valid: bool, issue: str}.
+        """
+        unit = CodeUnit(
+            name="reviewed_function",
+            filename="unknown",
+            language=Language.UNKNOWN,
+            start_line=0,
+            end_line=0,
+            source=unit_source,
+        ) if unit_source.strip() else None
+        result = _challenger_challenge(safety, reachable, unit, api_key)
+        return json.dumps({"valid": result.valid, "issue": result.issue,
+                           "verdict": "CONFIRMED BUG" if result.valid else f"REJECTED: {result.issue}"})
+
+    return [parse_diff, ask_user, formalize, z3_solve, challenge_finding, submit_report,
             shell, read_file, write_file, list_directory]
 
 
@@ -131,8 +156,8 @@ class OrchestratorAgent:
         self,
         api_key: str,
         clarification_handler: ClarificationHandler,
-        model: str = "gpt-4o",
-        max_turns: int = 20,
+        model: str = "gpt-4o-mini",
+        max_turns: int = 50,
         z3_timeout_ms: int = 30_000,
         weave_project: str | None = "astrio/verification-agents",
     ) -> None:
@@ -189,13 +214,22 @@ class OrchestratorAgent:
         else:
             initial_content = build_initial_message(diff, user_intent)
 
-        graph.invoke(
-            {"messages": [{"role": "user", "content": initial_content}]},
-            config={
-                "recursion_limit": self.max_turns * 3,
-                "callbacks": [WeaveTracer()],
-            },
-        )
+        import time as _time  # noqa: PLC0415
+        for _attempt in range(4):
+            try:
+                graph.invoke(
+                    {"messages": [{"role": "user", "content": initial_content}]},
+                    config={
+                        "recursion_limit": self.max_turns * 6,
+                        "callbacks": [WeaveTracer()],
+                    },
+                )
+                break
+            except Exception as _exc:
+                if ("rate_limit" in str(_exc).lower() or "429" in str(_exc)) and _attempt < 3:
+                    _time.sleep(2 ** _attempt * 5)
+                    continue
+                raise
 
         if report_box[0] is None:
             return VerificationReport(

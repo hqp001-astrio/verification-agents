@@ -31,6 +31,7 @@ from verification_agents.models import (
     VerifiableProperty,
 )
 from verification_agents.specialists import encoders, executor, generalist
+from verification_agents.specialists.challenger import challenge as _challenge
 from verification_agents.specialists.redis_store import JobStore
 from verification_agents.specialists.types import (
     DECISION_NO,
@@ -153,10 +154,19 @@ def _process_property(
         outcome.execution_confirmed = confirmed
         outcome.execution_detail = detail
 
+        # Challenger agent: second opinion — is this a real safety concern or a mistranslation?
+        if api_key:
+            cr = _challenge(constraint.safety, constraint.reachable, unit, api_key)
+            outcome.challenger_valid = cr.valid
+            outcome.challenger_issue = cr.issue
+            job.publish({"stage": "challenge", "concern": concern_label, "unit": prop.unit_name,
+                         "challenger_valid": cr.valid, "challenger_issue": cr.issue})
+
     job.memory_put(fn_hash, prop.kind.value, outcome.model_dump())
     job.publish({"stage": "property", "concern": concern_label, "unit": prop.unit_name,
                  "status": outcome.status.value,
-                 "execution_confirmed": outcome.execution_confirmed, "cached": False})
+                 "execution_confirmed": outcome.execution_confirmed,
+                 "challenger_valid": outcome.challenger_valid, "cached": False})
     return [outcome]
 
 
@@ -186,8 +196,18 @@ def _process_generalist(
             confirmed, detail = executor.reproduce_generic(unit, outcome.counterexample)
             outcome.execution_confirmed = confirmed
             outcome.execution_detail = detail
+
+            # Challenger agent: generalist findings especially need a second opinion
+            if api_key:
+                cr = _challenge(c.safety, c.reachable, unit, api_key)
+                outcome.challenger_valid = cr.valid
+                outcome.challenger_issue = cr.issue
+                job.publish({"stage": "challenge", "concern": "generalist", "unit": unit.name,
+                             "challenger_valid": cr.valid, "challenger_issue": cr.issue})
+
         job.publish({"stage": "property", "concern": "generalist", "unit": unit.name,
-                     "status": outcome.status.value, "cached": False})
+                     "status": outcome.status.value,
+                     "challenger_valid": outcome.challenger_valid, "cached": False})
         outcomes.append(outcome)
     return outcomes
 
@@ -249,7 +269,10 @@ def aggregate(outcomes: list[ColumnOutcome], job_id: str, elapsed_s: float,
 
     for o in outcomes:
         if o.status == SolverStatus.SAT:
-            if o.execution_confirmed is True:
+            # Challenger said this is a mistranslation — demote before anything else
+            if o.challenger_valid is False:
+                inconclusive.append(o)               # challenger-rejected: wrong formalization
+            elif o.execution_confirmed is True:
                 bugs.append(o)                       # reproduced on the real function -> sound bug
             elif o.execution_confirmed is False:
                 inconclusive.append(o)               # spurious -> a mistranslation we CAUGHT
