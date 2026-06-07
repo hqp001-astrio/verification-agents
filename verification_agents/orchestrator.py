@@ -197,8 +197,6 @@ class OrchestratorAgent:
 
         llm = ChatOpenAI(api_key=self.api_key, model=self.model, temperature=0)
 
-        from weave.integrations.langchain import WeaveTracer  # noqa: PLC0415
-
         graph = create_agent(
             model=llm,
             tools=tools,
@@ -214,15 +212,18 @@ class OrchestratorAgent:
         else:
             initial_content = build_initial_message(diff, user_intent)
 
+        invoke_config: dict[str, Any] = {"recursion_limit": self.max_turns * 6}
+        if self._weave_enabled:
+            from weave.integrations.langchain import WeaveTracer  # noqa: PLC0415
+
+            invoke_config["callbacks"] = [WeaveTracer()]
+
         import time as _time  # noqa: PLC0415
         for _attempt in range(4):
             try:
                 graph.invoke(
                     {"messages": [{"role": "user", "content": initial_content}]},
-                    config={
-                        "recursion_limit": self.max_turns * 6,
-                        "callbacks": [WeaveTracer()],
-                    },
+                    config=invoke_config,
                 )
                 break
             except Exception as _exc:

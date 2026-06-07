@@ -65,5 +65,7 @@ def build_preanalyzed_message(code_analysis_json: str, user_selection_json: str)
         "Steps 1 and 2 are already complete:\n\n"
         f"**Code analysis (parse_diff result):**\n```json\n{code_analysis_json}\n```\n\n"
         f"**User selection (ask_user result):**\n```json\n{user_selection_json}\n```\n\n"
-        "Proceed directly to step 3: call `formalize`, then `z3_solve`, then `submit_report`."
+        "Proceed directly to step 3: call `formalize`, then `z3_solve`. "
+        "For every SAT result, call `challenge_finding` before reporting it. "
+        "Then call `submit_report` to finish."
     )
