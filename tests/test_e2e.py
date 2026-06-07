@@ -80,7 +80,6 @@ def test_full_verification():
     print("\n=== Verification Report ===", flush=True)
     print(f"Decision: {report.decision}", flush=True)
 
-    # SAT + execution-confirmed = real bugs, even if challenger demoted them to inconclusive.
     findings = [
         o for o in (*report.bugs, *report.inconclusive, *report.proposed)
         if o.status == SolverStatus.SAT
@@ -88,10 +87,7 @@ def test_full_verification():
     print(f"\nFindings ({len(findings)} potential bug(s)):", flush=True)
     for o in findings:
         kind = o.concern.value.replace("_", " ")
-        confirmed = o.execution_confirmed is True
-        tag = "CONFIRMED" if confirmed else "UNCONFIRMED"
-        if o.challenger_valid is False:
-            tag += " (challenger rejected formalization)"
+        tag = "CONFIRMED" if o.execution_confirmed is True else "UNCONFIRMED"
         print(f"  • {o.unit_name} — {kind} [{tag}]", flush=True)
         if o.execution_detail:
             print(f"    {o.execution_detail}", flush=True)
@@ -110,7 +106,6 @@ def test_full_verification():
     )
     assert report.summary, "Report should include a non-empty summary"
 
-    # SAT findings may land in bugs (execution-confirmed) or inconclusive (challenger-rejected).
     sat_units = {
         o.unit_name
         for o in (*report.bugs, *report.inconclusive, *report.proposed)

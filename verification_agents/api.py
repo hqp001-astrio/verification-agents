@@ -8,13 +8,13 @@ Endpoints
 - ``GET  /api/jobs/{id}/events``replayable list of stage events
 - ``WS   /api/jobs/{id}/ws``    WebSocket: live stage events (server->client) +
                                 clarification responses (client->server)
+- ``POST /api/tasks``           create a chat task session -> returns job_id
+- ``WS   /api/tasks/{id}/ws``  persistent chat WebSocket: stream assistant tokens,
+                                receive user messages over the same connection
 - ``GET  /health``              service + Redis + Weave status
 
-The frontend reads its data from here and Redis — not from Weave (Weave is the trace
-recorder; the report carries a ``weave_trace_url`` to link out to it).
-
-WebSocket message protocol
---------------------------
+WebSocket message protocol (verification jobs)
+----------------------------------------------
 Server -> client  (JSON):
   every event from JobStore.events(), e.g.
     {"stage": "status", "status": "solving", ...}
@@ -26,21 +26,33 @@ Server -> client  (JSON):
 Client -> server  (JSON):
     {"type": "clarification_response", "selection": {"selected_ids": [...], "extra_notes": ""}}
 
+WebSocket message protocol (chat tasks)
+---------------------------------------
+Server -> client  (JSON):
+    {"stage": "ready"}                         <- session open, waiting for first message
+    {"stage": "token", "text": "..."}          <- streaming assistant token
+    {"stage": "message_done"}                  <- assistant turn complete
+    {"stage": "error", "message": "..."}       <- unrecoverable error
+
+Client -> server  (JSON):
+    {"type": "user_message", "content": "..."}
+
 Run: ``uv run uvicorn verification_agents.api:app --reload``
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from verification_agents.models import UserSelection, VerifiableProperty
@@ -51,12 +63,22 @@ from verification_agents.tools import parse_diff as _parse_diff
 load_dotenv()
 
 _MODEL = os.environ.get("VERIFY_MODEL", "gpt-4o-mini")
+_CHAT_MODEL = os.environ.get("CHAT_MODEL", "gpt-4o")
 _weave_enabled = False
 
 # Bridges the synchronous ask_user tool (runs in a background thread) to the
 # async WebSocket handler. Keyed by job_id.
 _CLARIFICATION_WAITERS: dict[str, threading.Event] = {}
 _CLARIFICATION_RESPONSES: dict[str, dict] = {}
+
+# Per-session queues for chat tasks: job_id -> asyncio.Queue of outbound WS events.
+# Each queue item is a dict ready to be sent as JSON.
+_CHAT_QUEUES: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+
+_CHAT_SYSTEM_PROMPT = (
+    "You are a helpful AI assistant. Be concise and accurate. "
+    "When helping with code, prefer short focused answers over long explanations."
+)
 
 
 def _ws_clarification_handler(job_id: str):
@@ -220,3 +242,76 @@ async def ws_job(job_id: str, ws: WebSocket) -> None:
         pass
     finally:
         stream_task.cancel()
+
+
+# ---------------------------------------------------------------------------
+# Chat task endpoints
+# ---------------------------------------------------------------------------
+
+class TaskRequest(BaseModel):
+    prompt: str | None = None
+
+
+@app.post("/api/tasks")
+async def create_task(req: TaskRequest) -> dict:
+    job_id = uuid.uuid4().hex[:12]
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    _CHAT_QUEUES[job_id] = queue
+    if req.prompt:
+        await queue.put({"_user_message": req.prompt})
+    return {"job_id": job_id, "status": "open", "ws": f"/api/tasks/{job_id}/ws"}
+
+
+@app.websocket("/api/tasks/{job_id}/ws")
+async def ws_task(job_id: str, ws: WebSocket) -> None:
+    await ws.accept()
+
+    queue = _CHAT_QUEUES.get(job_id)
+    if queue is None:
+        await ws.send_json({"stage": "error", "message": "unknown task"})
+        await ws.close()
+        return
+
+    openai_client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    history: list[dict[str, str]] = [{"role": "system", "content": _CHAT_SYSTEM_PROMPT}]
+
+    await ws.send_json({"stage": "ready"})
+
+    async def _handle_user_message(content: str) -> None:
+        history.append({"role": "user", "content": content})
+        try:
+            stream = await openai_client.chat.completions.create(
+                model=_CHAT_MODEL,
+                messages=history,  # type: ignore[arg-type]
+                stream=True,
+            )
+            assistant_text = ""
+            async for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    assistant_text += delta
+                    await ws.send_json({"stage": "token", "text": delta})
+            history.append({"role": "assistant", "content": assistant_text})
+            await ws.send_json({"stage": "message_done"})
+        except Exception as exc:
+            await ws.send_json({"stage": "error", "message": str(exc)})
+
+    async def _drain_queue() -> None:
+        """Forward any pre-queued messages (e.g. initial prompt from POST body)."""
+        while not queue.empty():
+            item = await queue.get()
+            if "_user_message" in item:
+                await _handle_user_message(item["_user_message"])
+
+    await _drain_queue()
+
+    try:
+        async for msg in ws.iter_json():
+            if msg.get("type") == "user_message":
+                content = str(msg.get("content", "")).strip()
+                if content:
+                    await _handle_user_message(content)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _CHAT_QUEUES.pop(job_id, None)
